@@ -46,6 +46,7 @@ impl Default for FrameState {
 pub struct CameraService {
     frame_state: Arc<RwLock<FrameState>>,
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     target_camera_idx: Arc<AtomicU32>,
     target_width: Arc<AtomicU32>,
     target_height: Arc<AtomicU32>,
@@ -57,11 +58,23 @@ impl CameraService {
         Self {
             frame_state: Arc::new(RwLock::new(FrameState::default())),
             running: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
             target_camera_idx: Arc::new(AtomicU32::new(0)),
             target_width: Arc::new(AtomicU32::new(1280)),
             target_height: Arc::new(AtomicU32::new(720)),
             worker_handle: None,
         }
+    }
+
+    pub fn toggle_pause(&self) -> bool {
+        let current = self.paused.load(Ordering::SeqCst);
+        self.paused.store(!current, Ordering::SeqCst);
+        !current
+    }
+
+    #[allow(dead_code)]
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
     }
 
     pub fn get_frame_state(&self) -> Arc<RwLock<FrameState>> {
@@ -113,6 +126,7 @@ impl CameraService {
 
         self.running.store(true, Ordering::SeqCst);
         let running = Arc::clone(&self.running);
+        let paused = Arc::clone(&self.paused);
         let frame_state = Arc::clone(&self.frame_state);
         let target_camera_idx = Arc::clone(&self.target_camera_idx);
         let target_width = Arc::clone(&self.target_width);
@@ -132,6 +146,17 @@ impl CameraService {
             let mut current_fps = 0.0f32;
 
             while running.load(Ordering::SeqCst) {
+                if paused.load(Ordering::SeqCst) {
+                    if let Some(mut old_cam) = camera_opt.take() {
+                        let _ = old_cam.stop_stream();
+                    }
+                    if let Ok(mut state) = frame_state.write() {
+                        state.fps = 0.0;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+
                 let req_idx = target_camera_idx.load(Ordering::SeqCst);
                 let req_w = target_width.load(Ordering::SeqCst);
                 let req_h = target_height.load(Ordering::SeqCst);

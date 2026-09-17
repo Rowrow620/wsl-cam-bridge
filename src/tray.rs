@@ -8,6 +8,8 @@ use crate::camera::CameraDeviceInfo;
 pub struct TrayManager {
     #[allow(dead_code)]
     pub tray_icon: TrayIcon,
+    pub pause_item: MenuItem,
+    pub pause_id: String,
     pub quit_id: String,
     pub open_web_id: String,
     pub copy_url_id: String,
@@ -25,7 +27,7 @@ impl TrayManager {
         let menu = Menu::new();
 
         // Status header
-        let title_item = MenuItem::new("🎥 WSL-Cam-Bridge: Active", false, None);
+        let title_item = MenuItem::new("WSL-Cam-Bridge: Active", false, None);
         let _ = menu.append(&title_item);
 
         let status_item = MenuItem::new(
@@ -34,6 +36,13 @@ impl TrayManager {
             None,
         );
         let _ = menu.append(&status_item);
+
+        let _ = menu.append(&PredefinedMenuItem::separator());
+
+        // Pause / Resume toggle
+        let pause_item = MenuItem::new("Pause Stream", true, None);
+        let pause_id = pause_item.id().0.clone();
+        let _ = menu.append(&pause_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -72,18 +81,18 @@ impl TrayManager {
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         // Action items
-        let copy_url_item = MenuItem::new("📋 Copy WSL Stream URL", true, None);
+        let copy_url_item = MenuItem::new("Copy WSL Stream URL", true, None);
         let copy_url_id = copy_url_item.id().0.clone();
         let _ = menu.append(&copy_url_item);
 
-        let open_web_item = MenuItem::new("🌐 Open Web Preview", true, None);
+        let open_web_item = MenuItem::new("Open Web Preview", true, None);
         let open_web_id = open_web_item.id().0.clone();
         let _ = menu.append(&open_web_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         // Quit item
-        let quit_item = MenuItem::new("❌ Exit", true, None);
+        let quit_item = MenuItem::new("Exit", true, None);
         let quit_id = quit_item.id().0.clone();
         let _ = menu.append(&quit_item);
 
@@ -97,6 +106,8 @@ impl TrayManager {
 
         Ok(Self {
             tray_icon,
+            pause_item,
+            pause_id,
             quit_id,
             open_web_id,
             copy_url_id,

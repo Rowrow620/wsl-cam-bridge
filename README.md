@@ -50,6 +50,11 @@ chmod +x wsl/setup_v4l2.sh
 
 This loads `v4l2loopback` and pipes the HTTP stream into `/dev/video0`.
 
+## Endpoints
+
+- `http://localhost:8080` (browser dashboard and preview)
+- `http://localhost:8080/video` (direct MJPEG video stream)
+
 ## Run on startup
 
 To launch the bridge automatically when Windows boots:

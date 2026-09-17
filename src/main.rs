@@ -78,6 +78,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[Tray] Exit clicked. Shutting down...");
                 running = false;
                 break;
+            } else if id == tray_manager.pause_id {
+                let is_paused = cam_service.toggle_pause();
+                if is_paused {
+                    tray_manager.pause_item.set_text("Resume Stream");
+                    println!("[Tray] Stream paused.");
+                } else {
+                    tray_manager.pause_item.set_text("Pause Stream");
+                    println!("[Tray] Stream resumed.");
+                }
             } else if id == tray_manager.open_web_id {
                 let url = format!("http://localhost:{port}");
                 let _ = open::that(url);
