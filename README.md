@@ -2,6 +2,8 @@
 
 A Windows system tray application that streams webcam video into WSL2.
 
+![Dashboard Preview](assets/dashboard.png)
+
 ## Why it exists
 
 Using `usbipd-win` to forward webcams into WSL2 does not work for integrated laptop cameras (such as on Dell XPS, ThinkPad, and Surface devices) because they connect over internal PCIe or MIPI buses rather than USB. In addition, default WSL2 kernels do not include UVC webcam drivers.
@@ -15,6 +17,9 @@ This tool captures video on the Windows host using Windows Media Foundation and 
 Download `wsl-cam-bridge.exe` from [Releases](https://github.com/Rowrow620/wsl-cam-bridge/releases) and run it.
 
 The app runs in the system tray near the clock. You can right-click the tray icon to switch cameras, change resolution, or copy the stream URL. You can also view the stream in your browser at `http://localhost:8080`.
+
+![Tray Menu](assets/tray-menu.png)
+
 
 ### 2. WSL2
 
