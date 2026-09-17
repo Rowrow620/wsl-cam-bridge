@@ -64,8 +64,7 @@ This loads `v4l2loopback` and pipes the HTTP stream into `/dev/video0`.
 
 To launch the bridge automatically when Windows boots:
 
-1. Press `Win + R`, type `shell:startup`, and press Enter.
-2. Right-click inside the folder, choose New -> Shortcut, and select `wsl-cam-bridge.exe`.
+Right-click the system tray icon and select "Launch on Startup". You can click it again anytime to disable it.
 
 ## License
 

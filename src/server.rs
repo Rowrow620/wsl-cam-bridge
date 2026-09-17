@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -17,6 +17,7 @@ struct StatusResponse {
     fps: f32,
     frame_count: u64,
     status: String,
+    paused: bool,
 }
 
 pub struct HttpServer {
@@ -25,7 +26,13 @@ pub struct HttpServer {
 }
 
 impl HttpServer {
-    pub fn start(port: u16, frame_state: Arc<RwLock<FrameState>>) -> Result<Self, String> {
+    pub fn start(
+        port: u16,
+        frame_state: Arc<RwLock<FrameState>>,
+        paused_flag: Arc<AtomicBool>,
+        target_width: Arc<AtomicU32>,
+        target_height: Arc<AtomicU32>,
+    ) -> Result<Self, String> {
         let addr = format!("0.0.0.0:{port}");
         let server = Server::http(&addr).map_err(|e| format!("Failed to bind {addr}: {e}"))?;
         println!("[Server] HTTP server listening on http://{addr}");
@@ -53,6 +60,10 @@ impl HttpServer {
                             handle_status(request, state);
                         } else if path == "/" || path == "/index.html" {
                             handle_index(request, port);
+                        } else if path == "/api/pause" {
+                            handle_api_pause(request, &paused_flag);
+                        } else if path.starts_with("/api/resolution") {
+                            handle_api_resolution(request, &path, &target_width, &target_height);
                         } else {
                             let resp = Response::from_string("Not Found")
                                 .with_status_code(StatusCode(404));
@@ -81,6 +92,77 @@ impl HttpServer {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+fn handle_api_pause(request: tiny_http::Request, paused_flag: &Arc<AtomicBool>) {
+    let current = paused_flag.load(Ordering::SeqCst);
+    paused_flag.store(!current, Ordering::SeqCst);
+    let new_state = !current;
+
+    let json = format!(r#"{{"paused":{new_state}}}"#);
+    let mut response = Response::from_string(json).with_header(
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+    );
+    response.add_header(
+        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+    );
+    let _ = request.respond(response);
+
+    if new_state {
+        println!("[API] Stream paused via web dashboard.");
+    } else {
+        println!("[API] Stream resumed via web dashboard.");
+    }
+}
+
+fn handle_api_resolution(
+    request: tiny_http::Request,
+    path: &str,
+    target_width: &Arc<AtomicU32>,
+    target_height: &Arc<AtomicU32>,
+) {
+    // Parse ?w=1280&h=720 from the URL
+    let mut w: Option<u32> = None;
+    let mut h: Option<u32> = None;
+
+    if let Some(query) = path.split('?').nth(1) {
+        for param in query.split('&') {
+            let mut kv = param.splitn(2, '=');
+            if let (Some(key), Some(val)) = (kv.next(), kv.next()) {
+                match key {
+                    "w" => w = val.parse().ok(),
+                    "h" => h = val.parse().ok(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if let (Some(width), Some(height)) = (w, h) {
+        target_width.store(width, Ordering::SeqCst);
+        target_height.store(height, Ordering::SeqCst);
+        println!("[API] Resolution set to {width}x{height} via web dashboard.");
+
+        let json = format!(r#"{{"width":{width},"height":{height}}}"#);
+        let mut response = Response::from_string(json).with_header(
+            Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+        );
+        response.add_header(
+            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+        );
+        let _ = request.respond(response);
+    } else {
+        let mut response =
+            Response::from_string(r#"{"error":"Missing w and h parameters"}"#)
+                .with_status_code(StatusCode(400))
+                .with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                );
+        response.add_header(
+            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+        );
+        let _ = request.respond(response);
     }
 }
 
@@ -171,11 +253,14 @@ fn handle_status(request: tiny_http::Request, state: Arc<RwLock<FrameState>>) {
                 height: guard.height,
                 fps: (guard.fps * 10.0).round() / 10.0,
                 frame_count: guard.frame_count,
-                status: if guard.frame_count > 0 {
+                status: if guard.paused {
+                    "paused".to_string()
+                } else if guard.frame_count > 0 {
                     "streaming".to_string()
                 } else {
                     "idle".to_string()
                 },
+                paused: guard.paused,
             }
         } else {
             StatusResponse {
@@ -185,6 +270,7 @@ fn handle_status(request: tiny_http::Request, state: Arc<RwLock<FrameState>>) {
                 fps: 0.0,
                 frame_count: 0,
                 status: "error".to_string(),
+                paused: false,
             }
         }
     };
@@ -217,6 +303,7 @@ fn handle_index(request: tiny_http::Request, port: u16) {
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --green: #22c55e;
+      --red: #ef4444;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
     body {{ background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }}
@@ -224,7 +311,9 @@ fn handle_index(request: tiny_http::Request, port: u16) {
     header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; }}
     .title-group {{ display: flex; align-items: center; gap: 12px; }}
     .badge {{ display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; background: rgba(34,197,94,0.15); color: var(--green); }}
+    .badge.paused {{ background: rgba(239,68,68,0.15); color: var(--red); }}
     .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }}
+    .dot.paused {{ background: var(--red); animation: none; }}
     @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.4; }} }}
     .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
     .video-container {{ width: 100%; border-radius: 8px; overflow: hidden; background: #000; position: relative; aspect-ratio: 16/9; display: flex; justify-content: center; align-items: center; }}
@@ -233,11 +322,20 @@ fn handle_index(request: tiny_http::Request, port: u16) {
     .stat-box {{ background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border: 1px solid var(--border); }}
     .stat-label {{ font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }}
     .stat-val {{ font-size: 1.25rem; font-weight: 700; margin-top: 4px; color: var(--accent); }}
+    .controls {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }}
+    .ctrl-btn {{ background: var(--border); border: 1px solid rgba(255,255,255,0.1); color: var(--text); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: background 0.15s, color 0.15s; }}
+    .ctrl-btn:hover {{ background: var(--accent); color: #000; }}
+    .ctrl-btn.active {{ background: var(--accent); color: #000; }}
+    .ctrl-btn.pause {{ background: rgba(239,68,68,0.2); border-color: var(--red); color: var(--red); }}
+    .ctrl-btn.pause:hover {{ background: var(--red); color: #fff; }}
+    .ctrl-btn.resume {{ background: rgba(34,197,94,0.2); border-color: var(--green); color: var(--green); }}
+    .ctrl-btn.resume:hover {{ background: var(--green); color: #fff; }}
     .code-block {{ background: #020617; border: 1px solid var(--border); border-radius: 8px; padding: 14px; position: relative; margin-top: 12px; }}
     pre {{ overflow-x: auto; font-family: "Cascadia Code", "Fira Code", monospace; font-size: 0.9rem; color: #e2e8f0; }}
     .copy-btn {{ position: absolute; right: 10px; top: 10px; background: var(--border); border: none; color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }}
     .copy-btn:hover {{ background: var(--accent); color: #000; }}
     .hint {{ color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin-top: 8px; }}
+    .section-title {{ font-size: 1rem; font-weight: 600; margin-bottom: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }}
   </style>
 </head>
 <body>
@@ -245,7 +343,7 @@ fn handle_index(request: tiny_http::Request, port: u16) {
     <header>
       <div class="title-group">
         <h2>WSL-Cam-Bridge</h2>
-        <span class="badge"><span class="dot"></span> LIVE</span>
+        <span class="badge" id="status-badge"><span class="dot" id="status-dot"></span> <span id="status-text">LIVE</span></span>
       </div>
       <div style="color: var(--text-muted); font-size: 0.9rem;">
         Listening on port: <strong>{port}</strong>
@@ -273,6 +371,16 @@ fn handle_index(request: tiny_http::Request, port: u16) {
           <div class="stat-label">Frames Streamed</div>
           <div class="stat-val" id="stat-frames">0</div>
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Controls</div>
+      <div class="controls">
+        <button class="ctrl-btn pause" id="btn-pause" onclick="togglePause()">Pause Stream</button>
+        <button class="ctrl-btn" onclick="setResolution(640, 480)">480p</button>
+        <button class="ctrl-btn active" onclick="setResolution(1280, 720)">720p</button>
+        <button class="ctrl-btn" onclick="setResolution(1920, 1080)">1080p</button>
       </div>
     </div>
 
@@ -323,6 +431,9 @@ ffmpeg -re -i "http://localhost:{port}/video" -f v4l2 /dev/video0</pre>
   </div>
 
   <script>
+    let isPaused = false;
+    let currentRes = '720p';
+
     function updateStats() {{
       fetch('/status')
         .then(res => res.json())
@@ -331,9 +442,71 @@ ffmpeg -re -i "http://localhost:{port}/video" -f v4l2 /dev/video0</pre>
           document.getElementById('stat-res').textContent = (data.width && data.height) ? `${{data.width}} x ${{data.height}}` : '--';
           document.getElementById('stat-fps').textContent = (data.fps || 0) + ' FPS';
           document.getElementById('stat-frames').textContent = data.frame_count || 0;
+
+          isPaused = data.paused || false;
+          updatePauseButton();
+          updateStatusBadge();
         }})
         .catch(() => {{}});
     }}
+
+    function updatePauseButton() {{
+      const btn = document.getElementById('btn-pause');
+      if (isPaused) {{
+        btn.textContent = 'Resume Stream';
+        btn.className = 'ctrl-btn resume';
+      }} else {{
+        btn.textContent = 'Pause Stream';
+        btn.className = 'ctrl-btn pause';
+      }}
+    }}
+
+    function updateStatusBadge() {{
+      const badge = document.getElementById('status-badge');
+      const dot = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      if (isPaused) {{
+        badge.className = 'badge paused';
+        dot.className = 'dot paused';
+        text.textContent = 'PAUSED';
+      }} else {{
+        badge.className = 'badge';
+        dot.className = 'dot';
+        text.textContent = 'LIVE';
+      }}
+    }}
+
+    function togglePause() {{
+      fetch('/api/pause', {{ method: 'POST' }})
+        .then(res => res.json())
+        .then(data => {{
+          isPaused = data.paused;
+          updatePauseButton();
+          updateStatusBadge();
+          if (!isPaused) {{
+            // Reconnect stream after resuming
+            const img = document.getElementById('live-stream');
+            img.src = '/video?' + Date.now();
+          }}
+        }})
+        .catch(() => {{}});
+    }}
+
+    function setResolution(w, h) {{
+      fetch(`/api/resolution?w=${{w}}&h=${{h}}`, {{ method: 'POST' }})
+        .then(res => res.json())
+        .then(() => {{
+          // Highlight active button
+          const buttons = document.querySelectorAll('.controls .ctrl-btn:not(#btn-pause)');
+          buttons.forEach(btn => btn.classList.remove('active'));
+          const label = h <= 480 ? '480p' : h <= 720 ? '720p' : '1080p';
+          buttons.forEach(btn => {{
+            if (btn.textContent === label) btn.classList.add('active');
+          }});
+        }})
+        .catch(() => {{}});
+    }}
+
     setInterval(updateStats, 1000);
     updateStats();
 

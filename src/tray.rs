@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -16,6 +18,10 @@ pub struct TrayManager {
     pub res_720p_id: String,
     pub res_1080p_id: String,
     pub res_480p_id: String,
+    pub refresh_cameras_id: String,
+    pub startup_item: MenuItem,
+    pub startup_id: String,
+    pub camera_submenu: Submenu,
     pub camera_item_ids: HashMap<String, u32>,
 }
 
@@ -78,6 +84,11 @@ impl TrayManager {
         }
         let _ = menu.append(&cam_submenu);
 
+        // Refresh Cameras
+        let refresh_cameras_item = MenuItem::new("Refresh Cameras", true, None);
+        let refresh_cameras_id = refresh_cameras_item.id().0.clone();
+        let _ = menu.append(&refresh_cameras_item);
+
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         // Action items
@@ -88,6 +99,19 @@ impl TrayManager {
         let open_web_item = MenuItem::new("Open Web Preview", true, None);
         let open_web_id = open_web_item.id().0.clone();
         let _ = menu.append(&open_web_item);
+
+        let _ = menu.append(&PredefinedMenuItem::separator());
+
+        // Launch on Startup toggle
+        let has_startup = startup_shortcut_exists();
+        let startup_label = if has_startup {
+            "Launch on Startup (On)"
+        } else {
+            "Launch on Startup (Off)"
+        };
+        let startup_item = MenuItem::new(startup_label, true, None);
+        let startup_id = startup_item.id().0.clone();
+        let _ = menu.append(&startup_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -114,9 +138,50 @@ impl TrayManager {
             res_720p_id,
             res_1080p_id,
             res_480p_id,
+            refresh_cameras_id,
+            startup_item,
+            startup_id,
+            camera_submenu: cam_submenu,
             camera_item_ids,
         })
     }
+
+    pub fn rebuild_camera_submenu(&mut self, devices: &[CameraDeviceInfo]) {
+        self.camera_item_ids.clear();
+
+        while self.camera_submenu.remove_at(0).is_some() {}
+
+        if devices.is_empty() {
+            let no_cam = MenuItem::new("No cameras detected", false, None);
+            let _ = self.camera_submenu.append(&no_cam);
+        } else {
+            for dev in devices {
+                let label = format!("[{}] {}", dev.index, dev.name);
+                let item = MenuItem::new(label, true, None);
+                self.camera_item_ids.insert(item.id().0.clone(), dev.index);
+                let _ = self.camera_submenu.append(&item);
+            }
+        }
+
+        println!("[Tray] Camera list refreshed: {} device(s) found.", devices.len());
+    }
+
+    pub fn show_notification(&self, body: &str) {
+        self.tray_icon.set_tooltip(Some(body)).ok();
+        // Reset tooltip after a delay is not practical here, so we keep the tooltip
+        // as a persistent status indicator until the next state change.
+    }
+
+    pub fn update_startup_label(&self) {
+        let has_startup = startup_shortcut_exists();
+        let label = if has_startup {
+            "Launch on Startup (On)"
+        } else {
+            "Launch on Startup (Off)"
+        };
+        self.startup_item.set_text(label);
+    }
+
 }
 
 fn create_camera_icon() -> Icon {
@@ -163,4 +228,84 @@ fn create_camera_icon() -> Icon {
     }
 
     Icon::from_rgba(rgba, width, height).expect("Failed to create tray icon from RGBA")
+}
+
+/// Returns the path to the Startup folder shortcut for this application.
+fn startup_shortcut_path() -> Option<PathBuf> {
+    let appdata = env::var("APPDATA").ok()?;
+    let startup_dir = PathBuf::from(appdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Startup");
+    Some(startup_dir.join("wsl-cam-bridge.lnk"))
+}
+
+/// Check whether a startup shortcut or copy exists.
+pub fn startup_shortcut_exists() -> bool {
+    let lnk = startup_shortcut_path().map(|p| p.exists()).unwrap_or(false);
+    let exe = env::var("APPDATA")
+        .ok()
+        .map(|a| {
+            PathBuf::from(a)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join("Startup")
+                .join("wsl-cam-bridge.exe")
+                .exists()
+        })
+        .unwrap_or(false);
+    lnk || exe
+}
+
+/// Toggle the startup shortcut: create it if missing, remove it if present.
+/// Returns true if startup is now enabled, false if disabled.
+pub fn toggle_startup() -> bool {
+    let lnk_path = match startup_shortcut_path() {
+        Some(p) => p,
+        None => return false,
+    };
+    let exe_path = lnk_path.with_file_name("wsl-cam-bridge.exe");
+
+    if lnk_path.exists() || exe_path.exists() {
+        let _ = std::fs::remove_file(&lnk_path);
+        let _ = std::fs::remove_file(&exe_path);
+        println!("[Startup] Removed startup shortcut.");
+        false
+    } else {
+        let current_exe = match env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let work_dir = current_exe.parent().unwrap_or(&current_exe);
+        let ps_cmd = format!(
+            "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Save()",
+            lnk_path.display(),
+            current_exe.display(),
+            work_dir.display()
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+            .output();
+
+        if lnk_path.exists() {
+            println!("[Startup] Created shortcut: {}", lnk_path.display());
+            true
+        } else {
+            // Fallback: copy executable directly
+            match std::fs::copy(&current_exe, &exe_path) {
+                Ok(_) => {
+                    println!("[Startup] Copied executable to startup folder.");
+                    true
+                }
+                Err(e) => {
+                    eprintln!("[Startup] Failed to create startup entry: {e}");
+                    false
+                }
+            }
+        }
+    }
 }

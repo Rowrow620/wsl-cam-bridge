@@ -28,6 +28,7 @@ pub struct FrameState {
     pub frame_count: u64,
     pub fps: f32,
     pub camera_name: String,
+    pub paused: bool,
 }
 
 impl Default for FrameState {
@@ -39,6 +40,7 @@ impl Default for FrameState {
             frame_count: 0,
             fps: 0.0,
             camera_name: String::from("Waiting for camera..."),
+            paused: false,
         }
     }
 }
@@ -79,6 +81,18 @@ impl CameraService {
 
     pub fn get_frame_state(&self) -> Arc<RwLock<FrameState>> {
         Arc::clone(&self.frame_state)
+    }
+
+    pub fn get_paused_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.paused)
+    }
+
+    pub fn get_target_width(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.target_width)
+    }
+
+    pub fn get_target_height(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.target_height)
     }
 
     pub fn list_devices() -> Vec<CameraDeviceInfo> {
@@ -144,6 +158,7 @@ impl CameraService {
             let mut last_fps_check = Instant::now();
             let mut last_device_retry = Instant::now() - Duration::from_secs(10);
             let mut current_fps = 0.0f32;
+            let mut jpeg_buf: Vec<u8> = Vec::with_capacity(512 * 1024);
 
             while running.load(Ordering::SeqCst) {
                 if paused.load(Ordering::SeqCst) {
@@ -152,6 +167,7 @@ impl CameraService {
                     }
                     if let Ok(mut state) = frame_state.write() {
                         state.fps = 0.0;
+                        state.paused = true;
                     }
                     thread::sleep(Duration::from_millis(100));
                     continue;
@@ -210,7 +226,7 @@ impl CameraService {
                                 let (width, height) = (rgb_img.width(), rgb_img.height());
                                 let raw_bytes = rgb_img.as_raw();
 
-                                let mut jpeg_buf = Vec::with_capacity((width * height) as usize / 4);
+                                jpeg_buf.clear();
                                 let mut cursor = Cursor::new(&mut jpeg_buf);
                                 let encoder = JpegEncoder::new_with_quality(&mut cursor, 75);
 
@@ -229,12 +245,13 @@ impl CameraService {
                                     }
 
                                     if let Ok(mut state) = frame_state.write() {
-                                        state.jpeg = Arc::new(jpeg_buf);
+                                        state.jpeg = Arc::new(jpeg_buf.clone());
                                         state.width = width;
                                         state.height = height;
                                         state.frame_count = frame_count;
                                         state.fps = current_fps;
                                         state.camera_name = cam_name.clone();
+                                        state.paused = false;
                                     }
                                     continue;
                                 }
@@ -252,7 +269,7 @@ impl CameraService {
                 let height = req_h;
                 let raw_rgb = generate_test_card(width, height, frame_count);
 
-                let mut jpeg_buf = Vec::with_capacity((width * height) as usize / 4);
+                jpeg_buf.clear();
                 let mut cursor = Cursor::new(&mut jpeg_buf);
                 let encoder = JpegEncoder::new_with_quality(&mut cursor, 75);
                 let _ = encoder.write_image(&raw_rgb, width, height, ExtendedColorType::Rgb8);
@@ -268,12 +285,13 @@ impl CameraService {
                 }
 
                 if let Ok(mut state) = frame_state.write() {
-                    state.jpeg = Arc::new(jpeg_buf);
+                    state.jpeg = Arc::new(jpeg_buf.clone());
                     state.width = width;
                     state.height = height;
                     state.frame_count = frame_count;
                     state.fps = current_fps;
                     state.camera_name = String::from("WSL-Cam-Bridge: Live Test Pattern (Connect camera anytime)");
+                    state.paused = false;
                 }
 
                 thread::sleep(Duration::from_millis(33)); // ~30 FPS

@@ -15,10 +15,35 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 
+fn parse_port() -> u16 {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Check --port <N>
+    for i in 0..args.len() {
+        if args[i] == "--port" {
+            if let Some(val) = args.get(i + 1) {
+                if let Ok(p) = val.parse::<u16>() {
+                    return p;
+                }
+            }
+        }
+    }
+
+    // Check WSL_CAM_PORT environment variable
+    if let Ok(val) = std::env::var("WSL_CAM_PORT") {
+        if let Ok(p) = val.parse::<u16>() {
+            return p;
+        }
+    }
+
+    8080
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Starting WSL-Cam-Bridge ===");
 
-    let port: u16 = 8080;
+    let port = parse_port();
+    println!("[Config] Using port: {port}");
 
     // 1. Enumerate cameras
     let devices = CameraService::list_devices();
@@ -36,7 +61,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Start HTTP / MJPEG streaming server
     let frame_state = cam_service.get_frame_state();
-    let mut http_server = match HttpServer::start(port, frame_state) {
+    let paused_flag = cam_service.get_paused_flag();
+    let target_width = cam_service.get_target_width();
+    let target_height = cam_service.get_target_height();
+
+    let mut http_server = match HttpServer::start(port, frame_state, paused_flag, target_width, target_height) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[Error] Failed to bind HTTP server: {e}");
@@ -45,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 4. Initialize System Tray
-    let tray_manager = match TrayManager::new(port, &devices) {
+    let mut tray_manager = match TrayManager::new(port, &devices) {
         Ok(tm) => tm,
         Err(e) => {
             eprintln!("[Error] Failed to create system tray icon: {e}");
@@ -82,9 +111,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let is_paused = cam_service.toggle_pause();
                 if is_paused {
                     tray_manager.pause_item.set_text("Resume Stream");
+                    tray_manager.show_notification("WSL-Cam-Bridge: Stream Paused");
                     println!("[Tray] Stream paused.");
                 } else {
                     tray_manager.pause_item.set_text("Pause Stream");
+                    tray_manager.show_notification("WSL-Cam-Bridge (Running)");
                     println!("[Tray] Stream resumed.");
                 }
             } else if id == tray_manager.open_web_id {
@@ -94,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let stream_url = format!("http://localhost:{port}/video");
                 if let Some(cb) = clipboard.as_mut() {
                     let _ = cb.set_text(stream_url.clone());
+                    tray_manager.show_notification("Stream URL copied to clipboard");
                     println!("[Tray] Copied stream URL to clipboard: {stream_url}");
                 }
             } else if id == tray_manager.res_720p_id {
@@ -105,6 +137,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if id == tray_manager.res_480p_id {
                 println!("[Tray] Switching to 640x480");
                 cam_service.set_resolution(640, 480);
+            } else if id == tray_manager.refresh_cameras_id {
+                println!("[Tray] Refreshing camera list...");
+                let new_devices = CameraService::list_devices();
+                tray_manager.rebuild_camera_submenu(&new_devices);
+                let count = new_devices.len();
+                tray_manager.show_notification(&format!("Found {count} camera(s)"));
+            } else if id == tray_manager.startup_id {
+                let enabled = tray::toggle_startup();
+                tray_manager.update_startup_label();
+                if enabled {
+                    tray_manager.show_notification("WSL-Cam-Bridge will launch on startup");
+                } else {
+                    tray_manager.show_notification("Startup launch disabled");
+                }
             } else if let Some(&cam_idx) = tray_manager.camera_item_ids.get(&id) {
                 println!("[Tray] Switching to camera index {cam_idx}");
                 cam_service.set_camera_index(cam_idx);
