@@ -244,7 +244,7 @@ fn handle_index(request: tiny_http::Request, port: u16) {
   <div class="container">
     <header>
       <div class="title-group">
-        <h2>🎥 WSL-Cam-Bridge</h2>
+        <h2>WSL-Cam-Bridge</h2>
         <span class="badge"><span class="dot"></span> LIVE</span>
       </div>
       <div style="color: var(--text-muted); font-size: 0.9rem;">
@@ -276,17 +276,22 @@ fn handle_index(request: tiny_http::Request, port: u16) {
       </div>
     </div>
 
-    <div class="card">
-      <h3>🚀 Connecting from WSL2</h3>
-      <p class="hint">
-        Inside WSL2, access this stream using <code>localhost:{port}</code> (with Windows 11 Mirrored Networking) or your Windows host IP.
-      </p>
+    <details class="card">
+      <summary style="cursor: pointer; font-size: 1.15rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; user-select: none;">
+        <span>Connecting from WSL2</span>
+        <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: normal;">Click to expand</span>
+      </summary>
 
       <div style="margin-top: 16px;">
-        <strong>1. Python & OpenCV (Zero Kernel Setup)</strong>
-        <div class="code-block">
-          <button class="copy-btn" onclick="copyCode('py-code')">Copy</button>
-          <pre id="py-code">import cv2
+        <p class="hint">
+          Inside WSL2, access this stream using <code>localhost:{port}</code> (with Windows 11 Mirrored Networking) or your Windows host IP.
+        </p>
+
+        <div style="margin-top: 16px;">
+          <strong>1. Python & OpenCV (Zero Kernel Setup)</strong>
+          <div class="code-block">
+            <button class="copy-btn" onclick="copyCode('py-code')">Copy</button>
+            <pre id="py-code">import cv2
 
 # Open stream from Windows Host
 cap = cv2.VideoCapture("http://localhost:{port}/video")
@@ -301,19 +306,20 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()</pre>
+          </div>
         </div>
-      </div>
 
-      <div style="margin-top: 16px;">
-        <strong>2. Map to a real /dev/video0 (For ROS & Legacy Linux Apps)</strong>
-        <div class="code-block">
-          <button class="copy-btn" onclick="copyCode('sh-code')">Copy</button>
-          <pre id="sh-code">sudo apt install -y v4l2loopback-dkms ffmpeg
+        <div style="margin-top: 16px;">
+          <strong>2. Map to a real /dev/video0 (For ROS & Legacy Linux Apps)</strong>
+          <div class="code-block">
+            <button class="copy-btn" onclick="copyCode('sh-code')">Copy</button>
+            <pre id="sh-code">sudo apt install -y v4l2loopback-dkms ffmpeg
 sudo modprobe v4l2loopback video_nr=0 card_label="Virtual_Cam"
 ffmpeg -re -i "http://localhost:{port}/video" -f v4l2 /dev/video0</pre>
+          </div>
         </div>
       </div>
-    </div>
+    </details>
   </div>
 
   <script>
