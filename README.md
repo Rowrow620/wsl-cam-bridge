@@ -12,7 +12,7 @@ This tool captures video on the Windows host using Windows Media Foundation and 
 
 ### 1. Windows
 
-Download and run `wsl-cam-bridge.exe`. 
+Download `wsl-cam-bridge.exe` from [Releases](https://github.com/Rowrow620/wsl-cam-bridge/releases) and run it.
 
 The app runs in the system tray near the clock. You can right-click the tray icon to switch cameras, change resolution, or copy the stream URL. You can also view the stream in your browser at `http://localhost:8080`.
 
@@ -61,4 +61,9 @@ To launch the bridge automatically when Windows boots:
 
 1. Press `Win + R`, type `shell:startup`, and press Enter.
 2. Right-click inside the folder, choose New -> Shortcut, and select `wsl-cam-bridge.exe`.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE) for details.
+
 
